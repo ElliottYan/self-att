@@ -5,6 +5,7 @@
 # the root directory of this source tree. An additional grant of patent rights
 # can be found in the PATENTS file in the same directory.
 
+from .adaptive_input import AdaptiveInput
 from .adaptive_softmax import AdaptiveSoftmax
 from .beamable_mm import BeamableMM
 from .character_token_embedder import CharacterTokenEmbedder
@@ -17,8 +18,10 @@ from .linearized_convolution import LinearizedConvolution
 from .multihead_attention import MultiheadAttention
 from .scalar_bias import ScalarBias
 from .sinusoidal_positional_embedding import SinusoidalPositionalEmbedding
+from .multidim_attention import MultidimAttention
 
 __all__ = [
+    'AdaptiveInput',
     'AdaptiveSoftmax',
     'BeamableMM',
     'CharacterTokenEmbedder',
@@ -31,4 +34,5 @@ __all__ = [
     'MultiheadAttention',
     'ScalarBias',
     'SinusoidalPositionalEmbedding',
+    'MultidimAttention'
 ]

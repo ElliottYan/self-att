@@ -13,12 +13,25 @@ from fairseq.data import data_utils
 
 class WordNoising(object):
     """Generate a noisy version of a sentence, without changing words themselves."""
-    def __init__(self, dictionary, bpe_cont_marker="@@"):
+    def __init__(self, dictionary, bpe_cont_marker="@@", bpe_end_marker=None):
         self.dictionary = dictionary
-        self.bpe_end = np.array([
-            not self.dictionary[i].endswith(bpe_cont_marker)
-            for i in range(len(self.dictionary))
-        ])
+        self.bpe_end = None
+        if bpe_cont_marker:
+            self.bpe_end = np.array([
+                not self.dictionary[i].endswith(bpe_cont_marker)
+                for i in range(len(self.dictionary))
+            ])
+        elif bpe_end_marker:
+            self.bpe_end = np.array([
+                self.dictionary[i].endswith(bpe_end_marker)
+                for i in range(len(self.dictionary))
+            ])
+
+        self.get_word_idx = (
+            self._get_bpe_word_idx
+            if self.bpe_end is not None
+            else self._get_token_idx
+        )
 
     def noising(self, x, lengths, noising_prob=0.0):
         raise NotImplementedError()
@@ -28,14 +41,30 @@ class WordNoising(object):
         Given a list of BPE tokens, for every index in the tokens list,
         return the index of the word grouping that it belongs to.
         For example, for input x corresponding to ["how", "are", "y@@", "ou"],
-        return [0, 1, 2, 2].
+        return [[0], [1], [2], [2]].
         """
         # x: (T x B)
         bpe_end = self.bpe_end[x]
+
+        if (x.size(0) == 1 and x.size(1) == 1):
+            # Special case when we only have one word in x. If x = [[N]],
+            # bpe_end is a scalar (bool) instead of a 2-dim array of bools,
+            # which makes the sum operation below fail.
+            return np.array([[0]])
+
         # do a reduce front sum to generate word ids
         word_idx = bpe_end[::-1].cumsum(0)[::-1]
         word_idx = word_idx.max(0)[None, :] - word_idx
         return word_idx
+
+    def _get_token_idx(self, x):
+        """
+        This is to extend noising functions to be able to apply to non-bpe
+        tokens, e.g. word or characters.
+        """
+        x = torch.t(x)
+        word_idx = np.array([range(len(x_i)) for x_i in x])
+        return np.transpose(word_idx)
 
 
 class WordDropout(WordNoising):
@@ -43,8 +72,8 @@ class WordDropout(WordNoising):
     then dropped words will be removed. Otherwise, it will be replaced by the
     blank_idx."""
 
-    def __init__(self, dictionary):
-        super().__init__(dictionary)
+    def __init__(self, dictionary, bpe_cont_marker="@@", bpe_end_marker=None):
+        super().__init__(dictionary, bpe_cont_marker, bpe_end_marker)
 
     def noising(self, x, lengths, dropout_prob=0.1, blank_idx=None):
         # x: (T x B), lengths: B
@@ -54,7 +83,7 @@ class WordDropout(WordNoising):
         assert 0 < dropout_prob < 1
 
         # be sure to drop entire words
-        word_idx = self._get_bpe_word_idx(x)
+        word_idx = self.get_word_idx(x)
         sentences = []
         modified_lengths = []
         for i in range(lengths.size(0)):
@@ -114,8 +143,8 @@ class WordDropout(WordNoising):
 class WordShuffle(WordNoising):
     """Shuffle words by no more than k positions."""
 
-    def __init__(self, dictionary):
-        super().__init__(dictionary)
+    def __init__(self, dictionary, bpe_cont_marker="@@", bpe_end_marker=None):
+        super().__init__(dictionary, bpe_cont_marker, bpe_end_marker)
 
     def noising(self, x, lengths, max_shuffle_distance=3):
         # x: (T x B), lengths: B
@@ -129,19 +158,16 @@ class WordShuffle(WordNoising):
         noise = np.random.uniform(
             0,
             max_shuffle_distance,
-            size=(x.size(0) - 1, x.size(1)),
+            size=(x.size(0), x.size(1)),
         )
         noise[0] = -1  # do not move start sentence symbol
-
         # be sure to shuffle entire words
-        word_idx = self._get_bpe_word_idx(x)
-
+        word_idx = self.get_word_idx(x)
         x2 = x.clone()
         for i in range(lengths.size(0)):
             length_no_eos = lengths[i]
             if x[lengths[i] - 1, i] == self.dictionary.eos():
                 length_no_eos = lengths[i] - 1
-
             # generate a random permutation
             scores = word_idx[:length_no_eos, i] + noise[word_idx[:length_no_eos, i], i]
             # ensure no reordering inside a word
@@ -164,15 +190,25 @@ class UnsupervisedMTNoising(WordNoising):
         dictionary,
         max_word_shuffle_distance,
         word_dropout_prob,
-        word_blanking_prob
+        word_blanking_prob,
+        bpe_cont_marker="@@",
+        bpe_end_marker=None,
     ):
         super().__init__(dictionary)
         self.max_word_shuffle_distance = max_word_shuffle_distance
         self.word_dropout_prob = word_dropout_prob
         self.word_blanking_prob = word_blanking_prob
 
-        self.word_dropout = WordDropout(dictionary=dictionary)
-        self.word_shuffle = WordShuffle(dictionary=dictionary)
+        self.word_dropout = WordDropout(
+            dictionary=dictionary,
+            bpe_cont_marker=bpe_cont_marker,
+            bpe_end_marker=bpe_end_marker,
+        )
+        self.word_shuffle = WordShuffle(
+            dictionary=dictionary,
+            bpe_cont_marker=bpe_cont_marker,
+            bpe_end_marker=bpe_end_marker,
+        )
 
     def noising(self, x, lengths):
         # 1. Word Shuffle
@@ -204,6 +240,7 @@ class NoisingDataset(torch.utils.data.Dataset):
         src_dataset,
         src_dict,
         seed,
+        noiser=None,
         noising_class=UnsupervisedMTNoising,
         **kwargs,
     ):
@@ -223,6 +260,8 @@ class NoisingDataset(torch.utils.data.Dataset):
             src_dict: src dict
             src_dict: src dictionary
             seed: seed to use when generating random noise
+            noiser: a pre-initialized noiser. If this is None, a noiser will
+                be created using noising_class and kwargs.
             noising_class: class to use when initializing noiser
             kwargs: noising args for configuring noising to apply
                 Note that there is no equivalent argparse code for these args
@@ -234,7 +273,7 @@ class NoisingDataset(torch.utils.data.Dataset):
 
         self.src_dataset = src_dataset
         self.src_dict = src_dict
-        self.noiser = noising_class(
+        self.noiser = noiser if noiser is not None else noising_class(
             dictionary=src_dict, **kwargs,
         )
         self.seed = seed

@@ -45,7 +45,6 @@ class Trainer(object):
             self._model = model.cuda()
 
         self._dummy_batch = dummy_batch
-        self._num_iterations = 0
         self._num_updates = 0
         self._optim_history = None
         self._optimizer = None
@@ -212,10 +211,10 @@ class Trainer(object):
             return None
 
         # aggregate logging outputs and sample sizes
-        sample_size = self.task.grad_denom(sample_sizes, self.criterion)
         logging_output = self.task.aggregate_logging_outputs(
             logging_outputs, self.criterion
         )
+        sample_size = self.task.grad_denom(sample_sizes, self.criterion)
 
         if not all(k in logging_output for k in ['ntokens', 'nsentences']):
             raise Exception((
@@ -224,7 +223,6 @@ class Trainer(object):
             ).format(self.task.__class__.__name__))
 
         try:
-            self._num_iterations += 1
             # normalize grads by sample size
             self.optimizer.multiply_grads(self.args.distributed_world_size / float(sample_size))
 
@@ -356,10 +354,6 @@ class Trainer(object):
     def get_num_updates(self):
         """Get the number of parameters updates."""
         return self._num_updates
-
-    def get_num_iterations(self):
-        """Get the number of iterations."""
-        return self._num_iterations
 
     def _prepare_sample(self, sample):
         if sample is None or len(sample) == 0:

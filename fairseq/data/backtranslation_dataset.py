@@ -8,6 +8,7 @@
 import torch
 
 from fairseq import sequence_generator
+from fairseq import utils
 
 from . import FairseqDataset, language_pair_dataset
 
@@ -22,6 +23,7 @@ class BacktranslationDataset(FairseqDataset):
         max_len_b,
         remove_eos_at_src=False,
         generator_class=sequence_generator.SequenceGenerator,
+        cuda=True,
         **kwargs,
     ):
         """
@@ -50,6 +52,7 @@ class BacktranslationDataset(FairseqDataset):
             generator_class: which SequenceGenerator class to use for
                 backtranslation. Output of generate() should be the same format
                 as fairseq's SequenceGenerator
+            cuda: use GPU for generation
             kwargs: generation args to init the backtranslation
                 SequenceGenerator
         """
@@ -71,6 +74,10 @@ class BacktranslationDataset(FairseqDataset):
             tgt_dict=tgt_dict,
             **kwargs,
         )
+
+        self.cuda = cuda if torch.cuda.is_available() else False
+        if self.cuda:
+            self.backtranslation_generator.cuda()
 
     def __getitem__(self, index):
         """
@@ -104,25 +111,25 @@ class BacktranslationDataset(FairseqDataset):
         # {id: id, source: generated backtranslation, target: original tgt}
         generated_samples = []
         for input_sample, hypos in zip(samples, backtranslation_hypos):
-            eos = self.tgt_dataset.src_dict.eos()
+            original_tgt = input_sample["source"].cpu()
+            generated_source = hypos[0]["tokens"].cpu()  # first hypo is best hypo
 
             # Append EOS to the tgt sentence if it does not have an EOS
             # This is the case if the samples in monolingual tgt_dataset don't
             # have an EOS appended to the end of each sentence.
-            original_tgt = input_sample["source"]
+            eos = self.tgt_dataset.src_dict.eos()
             if original_tgt[-1] != eos:
-                original_tgt = torch.cat([original_tgt, torch.LongTensor(eos)])
+                original_tgt = torch.cat([original_tgt, torch.LongTensor([eos])])
 
             # The generated source dialect backtranslation will have an EOS.
             # If we want our parallel data source to not have an EOS, we will
             # have to remove it.
-            generated_source = hypos[0]["tokens"]  # first hypo is best hypo
             if self.remove_eos_at_src:
                 assert generated_source[-1] == eos, (
-                    f"Expected generated backtranslation to have eos (id: "
-                    f"{eos}) at end, but instead found token id "
-                    f"{generated_source[-1]} at end."
-                )
+                    "Expected generated backtranslation to have eos (id: "
+                    "{eos}) at end, but instead found token id "
+                    "{generated_source[-1]} at end."
+                ).format(eos=eos, generated_source=generated_source)
                 generated_source = generated_source[:-1]
 
             generated_samples.append(
@@ -161,8 +168,8 @@ class BacktranslationDataset(FairseqDataset):
         sample. Note in this case, sample["target"] is None, and
         sample["net_input"]["src_tokens"] is really in tgt language.
         """
-        self.backtranslation_generator.cuda()
-        input = sample["net_input"]
+        s = utils.move_to_cuda(sample) if self.cuda else sample
+        input = s["net_input"]
         srclen = input["src_tokens"].size(1)
         hypos = self.backtranslation_generator.generate(
             input,
@@ -178,4 +185,4 @@ class BacktranslationDataset(FairseqDataset):
         Here, we return src dataset size as tgt dataset size as an approximation.
         We do not know src size until we backtranslate and generate src sentences.
         """
-        return (self.tgt_dataset.size(index), self.tgt_dataset.size(index))
+        return (self.tgt_dataset.size(index)[0], self.tgt_dataset.size(index)[0])

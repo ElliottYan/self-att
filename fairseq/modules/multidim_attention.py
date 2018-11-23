@@ -13,10 +13,9 @@ import torch.nn.functional as F
 from fairseq import utils
 
 
-class MultiheadAttention(nn.Module):
-    """Multi-headed attention.
+class MultidimAttention(nn.Module):
+    """Multi-dimensional attention.
 
-    See "Attention Is All You Need" for more details.
     """
 
     def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False):
@@ -24,13 +23,15 @@ class MultiheadAttention(nn.Module):
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.dropout = dropout
-        self.head_dim = embed_dim // num_heads
-        assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
+        # self.head_dim = embed_dim // num_heads
+        # assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
+        self.head_dim = embed_dim
         self.scaling = self.head_dim ** -0.5
 
-        self.in_proj_weight = Parameter(torch.Tensor(3 * embed_dim, embed_dim))
+        # self.in_proj_weight = Parameter(torch.Tensor(3 * embed_dim, embed_dim))
+        self.in_proj_weight = Parameter(torch.Tensor(3, num_heads * embed_dim, embed_dim))
         if bias:
-            self.in_proj_bias = Parameter(torch.Tensor(3 * embed_dim))
+            self.in_proj_bias = Parameter(torch.Tensor(3, num_heads * embed_dim))
         else:
             self.register_parameter('in_proj_bias', None)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
@@ -80,6 +81,7 @@ class MultiheadAttention(nn.Module):
         assert list(query.size()) == [tgt_len, bsz, embed_dim]
         assert key.size() == value.size()
 
+        # ignore this right now.
         if incremental_state is not None:
             saved_state = self._get_input_buffer(incremental_state)
             if 'prev_key' in saved_state:
@@ -112,12 +114,14 @@ class MultiheadAttention(nn.Module):
             assert self.bias_v is not None
             k = torch.cat([k, self.bias_k.repeat(1, bsz, 1)])
             v = torch.cat([v, self.bias_v.repeat(1, bsz, 1)])
+            # ignore this feature at first ...
             if attn_mask is not None:
                 attn_mask = torch.cat([attn_mask, attn_mask.new_zeros(attn_mask.size(0), 1)], dim=1)
             if key_padding_mask is not None:
                 key_padding_mask = torch.cat(
                     [key_padding_mask, key_padding_mask.new_zeros(key_padding_mask.size(0), 1)], dim=1)
 
+        # need to make sure tensor is stored in continuous area ---> tensor.contiguous()
         q = q.contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim).transpose(0, 1)
         if k is not None:
             k = k.contiguous().view(-1, bsz * self.num_heads, self.head_dim).transpose(0, 1)
@@ -182,7 +186,8 @@ class MultiheadAttention(nn.Module):
             # the transpose is a no-op copy before view, thus unnecessary
             attn = attn.contiguous().view(tgt_len, bsz, embed_dim)
         else:
-            attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
+            attn = torch.sum(attn.transpose(0, 1).contiguous().view(tgt_len, bsz, self.num_heads, embed_dim), -2)
+
         attn = self.out_proj(attn)
 
         if need_weights:
@@ -195,26 +200,28 @@ class MultiheadAttention(nn.Module):
         return attn, attn_weights
 
     def in_proj_qkv(self, query):
-        return self._in_proj(query).chunk(3, dim=-1)
+        return [self.in_proj_k(query), self.in_proj_k(query), self.in_proj_v(query)]
 
     def in_proj_kv(self, key):
-        return self._in_proj(key, start=self.embed_dim).chunk(2, dim=-1)
+        return [self.in_proj_k(key), self.in_proj_v(key)]
 
     def in_proj_q(self, query):
-        return self._in_proj(query, end=self.embed_dim)
+        return self._in_proj(query)
 
     def in_proj_k(self, key):
-        return self._in_proj(key, start=self.embed_dim, end=2 * self.embed_dim)
+        return self._in_proj(key, qkv=1)
 
     def in_proj_v(self, value):
-        return self._in_proj(value, start=2 * self.embed_dim)
+        return self._in_proj(value, qkv=2)
 
-    def _in_proj(self, input, start=0, end=None):
+    def _in_proj(self, input, qkv=0):
+        # weight : (3, num_heads * embed_dim, embed_dim)
         weight = self.in_proj_weight
         bias = self.in_proj_bias
-        weight = weight[start:end, :]
+        weight = weight[qkv]
         if bias is not None:
-            bias = bias[start:end]
+            bias = bias[qkv]
+        # return size : [..., num_heads * embed_dim]
         return F.linear(input, weight, bias)
 
     def reorder_incremental_state(self, incremental_state, new_order):
