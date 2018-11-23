@@ -130,3 +130,5 @@ This is a PyTorch version of
 learning toolkit from Facebook AI Research. The original authors of this
 reimplementation are (in no particular order) Sergey Edunov, Myle Ott, and Sam
 Gross.
+=======
+# self-att
