@@ -18,7 +18,7 @@ class MultidimAttention(nn.Module):
 
     """
 
-    def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False):
+    def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False, multihead_init=True):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -47,6 +47,18 @@ class MultidimAttention(nn.Module):
         self.reset_parameters()
 
         self.onnx_trace = False
+
+        if multihead_init:
+            # could apply curriculum learning
+            self.head_weight = nn.Parameter(torch.zeros([num_heads, embed_dim, embed_dim]), requires_grad=True)
+            self._multihead_init()
+
+    def _multihead_init(self):
+        if self.embed_dim % self.num_heads != 0:
+            raise ValueError('Embed dim should be divisible by num_heads!')
+        step = self.embed_dim // self.num_heads
+        for i in range(self.num_heads):
+            self.head_weight[i][i*step: (i+1)*step] = 1
 
     def prepare_for_onnx_export_(self):
         self.onnx_trace = True
@@ -200,7 +212,6 @@ class MultidimAttention(nn.Module):
         return attn, attn_weights
 
     def in_proj_qkv(self, query):
-        # return [self.in_proj_k(query), self.in_proj_k(query), self.in_proj_v(query)]
         return [self.in_proj_q(query), self.in_proj_k(query), self.in_proj_v(query)]
 
     def in_proj_kv(self, key):
@@ -220,6 +231,11 @@ class MultidimAttention(nn.Module):
         weight = self.in_proj_weight
         bias = self.in_proj_bias
         weight = weight[qkv]
+        # multiply weight with head_weight.
+        import pdb
+        pdb.set_trace()
+        head_weight = self.head_weight.contiguous().view(-1, self.embed_dim).transpose(1, 2)
+        weight = weight * head_weight
         if bias is not None:
             bias = bias[qkv]
         # return size : [..., num_heads * embed_dim]
