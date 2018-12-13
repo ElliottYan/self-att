@@ -58,7 +58,7 @@ class MultidimAttention(nn.Module):
             raise ValueError('Embed dim should be divisible by num_heads!')
         step = self.embed_dim // self.num_heads
         for i in range(self.num_heads):
-            self.head_weight[i][i*step: (i+1)*step] = 1
+            self.head_weight.data[i][i*step: (i+1)*step] = 1
 
     def prepare_for_onnx_export_(self):
         self.onnx_trace = True
@@ -232,9 +232,7 @@ class MultidimAttention(nn.Module):
         bias = self.in_proj_bias
         weight = weight[qkv]
         # multiply weight with head_weight.
-        import pdb
-        pdb.set_trace()
-        head_weight = self.head_weight.contiguous().view(-1, self.embed_dim).transpose(1, 2)
+        head_weight = self.head_weight.transpose(1, 2).contiguous().view(-1, self.embed_dim)
         weight = weight * head_weight
         if bias is not None:
             bias = bias[qkv]

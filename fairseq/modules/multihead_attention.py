@@ -239,3 +239,30 @@ class MultiheadAttention(nn.Module):
             'attn_state',
             buffer,
         )
+
+class MultiheadAttentionDropout(MultiheadAttention):
+    def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False, head_dropout=0.5):
+        super().__init__(
+            embed_dim,
+            num_heads,
+            dropout=dropout,
+            bias=bias,
+            add_bias_kv=add_bias_kv,
+            add_zero_attn=add_zero_attn
+        )
+        self.head_dropout_p = head_dropout
+
+    def _in_proj(self, input, start=0, end=None):
+        weight = self.in_proj_weight
+        bias = self.in_proj_bias
+        weight = weight[start:end, :]
+        if bias is not None:
+            bias = bias[start:end]
+        # here apply randomly head-level dropout.
+        if self.training:
+            prob = torch.zeros([1]).uniform_()
+            weight *= (prob > self.head_dropout_p).float()
+            bias *= (prob > self.head_dropout_p).float()
+        return F.linear(input, weight, bias)
+
+

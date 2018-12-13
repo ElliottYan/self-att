@@ -16,7 +16,7 @@ from fairseq import utils
 
 from fairseq.modules import (
     AdaptiveInput, AdaptiveSoftmax, CharacterTokenEmbedder, LearnedPositionalEmbedding, MultiheadAttention,
-    MultidimAttention, SinusoidalPositionalEmbedding
+    SinusoidalPositionalEmbedding, MultiheadAttentionDropout, MultidimAttention
 )
 
 from . import (
@@ -24,9 +24,19 @@ from . import (
     register_model_architecture,
 )
 
+att_set = {
+    MultiheadAttention,
+    MultiheadAttentionDropout,
+    MultidimAttention
+}
 
-@register_model('transformer_multidim')
-class TransformerModel(FairseqModel):
+att_types = {str(model.__name__):model for model in att_set}
+
+Attention = None
+
+
+@register_model('general_transformer')
+class GeneralTransformerModel(FairseqModel):
     """
     Transformer model from `"Attention Is All You Need" (Vaswani, et al, 2017)
     <https://arxiv.org/abs/1706.03762>`_.
@@ -93,6 +103,9 @@ class TransformerModel(FairseqModel):
                                  'Must be used with adaptive_loss criterion'),
         parser.add_argument('--adaptive-softmax-dropout', type=float, metavar='D',
                             help='sets adaptive softmax dropout for the tail projections')
+        parser.add_argument('--attention_type', type=str, metavar='ATT_TYPE',
+                            default='MultiheadAttention',
+                            help='used attention type for transformer model.')
 
     @classmethod
     def build_model(cls, args, task):
@@ -105,6 +118,12 @@ class TransformerModel(FairseqModel):
             args.max_source_positions = 1024
         if not hasattr(args, 'max_target_positions'):
             args.max_target_positions = 1024
+
+        # define attention_type
+        global Attention
+        if args.attention_type not in att_types:
+            raise ValueError('Assign wrong attention types.')
+        Attention = att_types[args.attention_type]
 
         src_dict, tgt_dict = task.source_dictionary, task.target_dictionary
 
@@ -142,7 +161,7 @@ class TransformerModel(FairseqModel):
 
         encoder = TransformerEncoder(args, src_dict, encoder_embed_tokens)
         decoder = TransformerDecoder(args, tgt_dict, decoder_embed_tokens)
-        return TransformerModel(encoder, decoder)
+        return GeneralTransformerModel(encoder, decoder)
 
 '''
 @register_model('transformer_lm')
@@ -221,6 +240,7 @@ class TransformerLanguageModel(FairseqLanguageModel):
             args.max_source_positions = args.tokens_per_sample
         if not hasattr(args, 'max_target_positions'):
             args.max_target_positions = args.tokens_per_sample
+
 
         if args.character_embeddings:
             embed_tokens = CharacterTokenEmbedder(task.dictionary, eval(args.character_filters),
@@ -569,9 +589,9 @@ class TransformerEncoderLayer(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.embed_dim = args.encoder_embed_dim
-        self.self_attn = MultidimAttention(
+        self.self_attn = Attention(
             self.embed_dim, args.encoder_attention_heads,
-            dropout=args.attention_dropout,
+            dropout=args.attention_dropout
         )
         self.dropout = args.dropout
         self.relu_dropout = args.relu_dropout
@@ -635,7 +655,7 @@ class TransformerDecoderLayer(nn.Module):
     def __init__(self, args, no_encoder_attn=False):
         super().__init__()
         self.embed_dim = args.decoder_embed_dim
-        self.self_attn = MultidimAttention(
+        self.self_attn = Attention(
             self.embed_dim, args.decoder_attention_heads,
             dropout=args.attention_dropout,
         )
@@ -649,7 +669,7 @@ class TransformerDecoderLayer(nn.Module):
             self.encoder_attn = None
             self.encoder_attn_layer_norm = None
         else:
-            self.encoder_attn = MultidimAttention(
+            self.encoder_attn = Attention(
                 self.embed_dim, args.decoder_attention_heads,
                 dropout=args.attention_dropout,
             )
@@ -826,7 +846,9 @@ def transformer_lm_gbw(args):
     transformer_lm_big(args)
 
 '''
-@register_model_architecture('transformer_multidim', 'transformer_multidim')
+
+
+@register_model_architecture('general_transformer', 'general_transformer')
 def base_architecture(args):
     args.encoder_embed_path = getattr(args, 'encoder_embed_path', None)
     args.encoder_embed_dim = getattr(args, 'encoder_embed_dim', 512)
@@ -855,7 +877,7 @@ def base_architecture(args):
     args.decoder_input_dim = getattr(args, 'decoder_input_dim', args.decoder_embed_dim)
 
 
-@register_model_architecture('transformer_multidim', 'transformer_multidim_iwslt_de_en')
+@register_model_architecture('general_transformer', 'general_transformer_iwslt_de_en')
 def transformer_iwslt_de_en(args):
     args.encoder_embed_dim = getattr(args, 'encoder_embed_dim', 512)
     args.encoder_ffn_embed_dim = getattr(args, 'encoder_ffn_embed_dim', 1024)
@@ -868,13 +890,13 @@ def transformer_iwslt_de_en(args):
     base_architecture(args)
 
 
-@register_model_architecture('transformer_multidim', 'transformer_multidim_wmt_en_de')
+@register_model_architecture('general_transformer', 'general_transformer_wmt_en_de')
 def transformer_wmt_en_de(args):
     base_architecture(args)
 
 
 # parameters used in the "Attention Is All You Need" paper (Vaswani, et al, 2017)
-@register_model_architecture('transformer_multidim', 'transformer_multidim_vaswani_wmt_en_de_big')
+@register_model_architecture('general_transformer', 'general_transformer_vaswani_wmt_en_de_big')
 def transformer_vaswani_wmt_en_de_big(args):
     args.encoder_embed_dim = getattr(args, 'encoder_embed_dim', 1024)
     args.encoder_ffn_embed_dim = getattr(args, 'encoder_ffn_embed_dim', 4096)
@@ -887,20 +909,20 @@ def transformer_vaswani_wmt_en_de_big(args):
     base_architecture(args)
 
 
-@register_model_architecture('transformer_multidim', 'transformer_multidim_vaswani_wmt_en_fr_big')
+@register_model_architecture('general_transformer', 'general_transformer_vaswani_wmt_en_fr_big')
 def transformer_vaswani_wmt_en_fr_big(args):
     args.dropout = getattr(args, 'dropout', 0.1)
     transformer_vaswani_wmt_en_de_big(args)
 
 
-@register_model_architecture('transformer_multidim', 'transformer_multidim_wmt_en_de_big')
+@register_model_architecture('general_transformer', 'general_transformer_wmt_en_de_big')
 def transformer_wmt_en_de_big(args):
     args.attention_dropout = getattr(args, 'attention_dropout', 0.1)
     transformer_vaswani_wmt_en_de_big(args)
 
 
 # default parameters used in tensor2tensor implementation
-@register_model_architecture('transformer_multidim', 'transformer_multidim_wmt_en_de_big_t2t')
+@register_model_architecture('general_transformer', 'general_transformer_wmt_en_de_big_t2t')
 def transformer_wmt_en_de_big_t2t(args):
     args.encoder_normalize_before = getattr(args, 'encoder_normalize_before', True)
     args.decoder_normalize_before = getattr(args, 'decoder_normalize_before', True)
