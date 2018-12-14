@@ -16,7 +16,7 @@ from fairseq import utils
 
 from fairseq.modules import (
     AdaptiveInput, AdaptiveSoftmax, CharacterTokenEmbedder, LearnedPositionalEmbedding, MultiheadAttention,
-    SinusoidalPositionalEmbedding, MultiheadAttentionDropout, MultidimAttention
+    SinusoidalPositionalEmbedding, MultiheadAttentionDropoutHead, MultidimAttention, MultiheadAttentionDropoutProj
 )
 
 from . import (
@@ -26,7 +26,8 @@ from . import (
 
 att_set = {
     MultiheadAttention,
-    MultiheadAttentionDropout,
+    MultiheadAttentionDropoutHead,
+    MultiheadAttentionDropoutProj,
     MultidimAttention
 }
 

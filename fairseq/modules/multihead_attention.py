@@ -240,7 +240,8 @@ class MultiheadAttention(nn.Module):
             buffer,
         )
 
-class MultiheadAttentionDropout(MultiheadAttention):
+class MultiheadAttentionDropoutProj(MultiheadAttention):
+    # dropout in projection-level
     def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False, head_dropout=0.5):
         super().__init__(
             embed_dim,
@@ -260,9 +261,42 @@ class MultiheadAttentionDropout(MultiheadAttention):
             bias = bias[start:end]
         # here apply randomly head-level dropout.
         if self.training:
-            prob = torch.zeros([1]).uniform_()
-            weight *= (prob > self.head_dropout_p).float()
-            bias *= (prob > self.head_dropout_p).float()
+            cuda = torch.device('cuda')
+            prob = torch.zeros([1], device=cuda).uniform_()
+            weight = weight * (prob > self.head_dropout_p).float()
+            bias = bias * (prob > self.head_dropout_p).float()
         return F.linear(input, weight, bias)
 
+
+class MultiheadAttentionDropoutHead(MultiheadAttention):
+    # dropout in head-level
+    def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False, head_dropout=0.5):
+        super().__init__(
+            embed_dim,
+            num_heads,
+            dropout=dropout,
+            bias=bias,
+            add_bias_kv=add_bias_kv,
+            add_zero_attn=add_zero_attn
+        )
+        self.head_dropout_p = head_dropout
+
+    def forward(self, *args, **kwargs):
+        """Input shape: Time x Batch x Channel
+
+        Self-attention can be implemented by passing in the same arguments for
+        query, key and value. Timesteps can be masked by supplying a T x T mask in the
+        `attn_mask` argument. Padding elements can be excluded from
+        the key by passing a binary ByteTensor (`key_padding_mask`) with shape:
+        batch x src_len, where padding elements are indicated by 1s.
+        """
+        attn, attn_weights = super(MultiheadAttentionDropoutHead, self).forward(*args, **kwargs)
+
+        cuda = torch.device('cuda')
+        drop = torch.randint(0, self.num_heads, [1], device=cuda).long()
+        import pdb
+        pdb.set_trace()
+        attn[drop] = 0.
+        attn_weights[drop] = 0.
+        return attn, attn_weights
 
