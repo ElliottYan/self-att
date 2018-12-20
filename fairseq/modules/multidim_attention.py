@@ -212,7 +212,7 @@ class MultidimAttention(nn.Module):
         return attn, attn_weights
 
     def in_proj_qkv(self, query):
-        return [self.in_proj_k(query), self.in_proj_k(query), self.in_proj_v(query)]
+        return [self.in_proj_q(query), self.in_proj_k(query), self.in_proj_v(query)]
 
     def in_proj_kv(self, key):
         return [self.in_proj_k(key), self.in_proj_v(key)]
