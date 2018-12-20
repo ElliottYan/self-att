@@ -299,12 +299,17 @@ class MultiheadAttentionDropoutHead(MultiheadAttention):
                                                                                 need_weights=need_weights,
                                                                                 static_kv=static_kv,
                                                                                 attn_mask=attn_mask)
-        cuda = torch.device('cuda')
-        drop = torch.randint(0, self.num_heads, [self.head_dropout_num], device=cuda).long()
-        attn[drop] = 0.
-        if need_weights:
-            attn_weights[drop] = 0.
-        return attn, attn_weights
+        if self.training:
+            cuda = torch.device('cuda')
+            drop = torch.randint(0, self.num_heads, [self.head_dropout_num], device=cuda).long()
+            attn[drop] = 0.
+            if need_weights:
+                try:
+                    attn_weights[drop] = 0.
+                except:
+                    import pdb
+                    pdb.set_trace()
+        return attn, attn_weights, 0
 
 class MultiheadAttentionExtraLoss(MultiheadAttention):
 
@@ -449,5 +454,6 @@ class MultiheadAttentionExtraLoss(MultiheadAttention):
         for i in range(self.num_heads):
             for j in range(self.num_heads):
                 extra_loss += torch.sum(attn_weights[i] * attn_weights[j])
+        extra_loss = extra_loss / (self.num_heads ** 2)
 
         return attn, attn_weights, extra_loss
