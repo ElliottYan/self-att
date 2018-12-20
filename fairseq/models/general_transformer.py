@@ -16,7 +16,8 @@ from fairseq import utils
 
 from fairseq.modules import (
     AdaptiveInput, AdaptiveSoftmax, CharacterTokenEmbedder, LearnedPositionalEmbedding, MultiheadAttention,
-    SinusoidalPositionalEmbedding, MultiheadAttentionDropoutHead, MultidimAttention, MultiheadAttentionDropoutProj
+    SinusoidalPositionalEmbedding, MultiheadAttentionDropoutHead, MultidimAttention, MultiheadAttentionDropoutProj,
+    MultiheadAttentionExtraLoss,
 )
 
 from . import (
@@ -28,7 +29,8 @@ att_set = {
     MultiheadAttention,
     MultiheadAttentionDropoutHead,
     MultiheadAttentionDropoutProj,
-    MultidimAttention
+    MultiheadAttentionExtraLoss,
+    MultidimAttention,
 }
 
 att_types = {str(model.__name__):model for model in att_set}
@@ -322,6 +324,7 @@ class TransformerEncoder(FairseqEncoder):
                   padding elements of shape `(batch, src_len)`
         """
         # embed tokens and positions
+        extra_loss = 0
         x = self.embed_scale * self.embed_tokens(src_tokens)
         if self.embed_positions is not None:
             x += self.embed_positions(src_tokens)
@@ -337,7 +340,8 @@ class TransformerEncoder(FairseqEncoder):
 
         # encoder layers
         for layer in self.layers:
-            x = layer(x, encoder_padding_mask)
+            x, layer_loss = layer(x, encoder_padding_mask)
+            extra_loss += layer_loss
 
         if self.normalize:
             x = self.layer_norm(x)
@@ -345,6 +349,7 @@ class TransformerEncoder(FairseqEncoder):
         return {
             'encoder_out': x,  # T x B x C
             'encoder_padding_mask': encoder_padding_mask,  # B x T
+            'extra_loss': extra_loss,
         }
 
     def reorder_encoder_out(self, encoder_out, new_order):
@@ -472,6 +477,9 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 - the last decoder layer's attention weights of shape `(batch,
                   tgt_len, src_len)`
         """
+        # get extra loss from encoder.
+        extra_loss = encoder_out['extra_loss']
+
         # embed positions
         positions = self.embed_positions(
             prev_output_tokens,
@@ -501,7 +509,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
 
         # decoder layers
         for layer in self.layers:
-            x, attn = layer(
+            x, attn, layer_loss = layer(
                 x,
                 encoder_out['encoder_out'] if encoder_out is not None else None,
                 encoder_out['encoder_padding_mask'] if encoder_out is not None else None,
@@ -509,6 +517,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 self_attn_mask=self.buffered_future_mask(x) if incremental_state is None else None,
             )
             inner_states.append(x)
+            extra_loss += layer_loss
 
         if self.normalize:
             x = self.layer_norm(x)
@@ -526,7 +535,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
             else:
                 x = F.linear(x, self.embed_out)
 
-        return x, {'attn': attn, 'inner_states': inner_states}
+        return x, {'attn': attn, 'inner_states': inner_states, 'extra_loss': extra_loss}
 
     def max_positions(self):
         """Maximum output length supported by the decoder."""
@@ -613,7 +622,7 @@ class TransformerEncoderLayer(nn.Module):
         """
         residual = x
         x = self.maybe_layer_norm(0, x, before=True)
-        x, _ = self.self_attn(query=x, key=x, value=x, key_padding_mask=encoder_padding_mask)
+        x, _, extra_loss = self.self_attn(query=x, key=x, value=x, key_padding_mask=encoder_padding_mask)
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = residual + x
         x = self.maybe_layer_norm(0, x, after=True)
@@ -626,7 +635,7 @@ class TransformerEncoderLayer(nn.Module):
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = residual + x
         x = self.maybe_layer_norm(1, x, after=True)
-        return x
+        return x, extra_loss
 
     def maybe_layer_norm(self, i, x, before=False, after=False):
         assert before ^ after
@@ -699,6 +708,7 @@ class TransformerDecoderLayer(nn.Module):
         Returns:
             encoded output of shape `(batch, src_len, embed_dim)`
         """
+        extra_loss = 0
         residual = x
         x = self.maybe_layer_norm(self.self_attn_layer_norm, x, before=True)
         if prev_self_attn_state is not None:
@@ -707,7 +717,7 @@ class TransformerDecoderLayer(nn.Module):
             prev_key, prev_value = prev_self_attn_state
             saved_state = {"prev_key": prev_key, "prev_value": prev_value}
             self.self_attn._set_input_buffer(incremental_state, saved_state)
-        x, _ = self.self_attn(
+        x, _, self_attn_loss = self.self_attn(
             query=x,
             key=x,
             value=x,
@@ -716,6 +726,7 @@ class TransformerDecoderLayer(nn.Module):
             need_weights=False,
             attn_mask=self_attn_mask,
         )
+        extra_loss += self_attn_loss
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = residual + x
         x = self.maybe_layer_norm(self.self_attn_layer_norm, x, after=True)
@@ -730,7 +741,7 @@ class TransformerDecoderLayer(nn.Module):
                 prev_key, prev_value = prev_attn_state
                 saved_state = {"prev_key": prev_key, "prev_value": prev_value}
                 self.encoder_attn._set_input_buffer(incremental_state, saved_state)
-            x, attn = self.encoder_attn(
+            x, attn, encoder_attn_loss = self.encoder_attn(
                 query=x,
                 key=encoder_out,
                 value=encoder_out,
@@ -742,6 +753,8 @@ class TransformerDecoderLayer(nn.Module):
             x = F.dropout(x, p=self.dropout, training=self.training)
             x = residual + x
             x = self.maybe_layer_norm(self.encoder_attn_layer_norm, x, after=True)
+
+            extra_loss += encoder_attn_loss
 
         residual = x
         x = self.maybe_layer_norm(self.final_layer_norm, x, before=True)
@@ -755,7 +768,7 @@ class TransformerDecoderLayer(nn.Module):
             saved_state = self.self_attn._get_input_buffer(incremental_state)
             self_attn_state = saved_state["prev_key"], saved_state["prev_value"]
             return x, attn, self_attn_state
-        return x, attn
+        return x, attn, extra_loss
 
     def maybe_layer_norm(self, layer_norm, x, before=False, after=False):
         assert before ^ after

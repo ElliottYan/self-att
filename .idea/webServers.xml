@@ -10,6 +10,14 @@
           <option name="port" value="1302" />
         </fileTransfer>
       </webServer>
+      <webServer id="e5586931-9c25-45be-9bd3-d913d318c6c6" name="57" url="http://10.6.206.57">
+        <fileTransfer host="10.6.206.57" port="36000" accessType="SFTP">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" />
+          </advancedOptions>
+          <option name="port" value="36000" />
+        </fileTransfer>
+      </webServer>
     </option>
   </component>
 </project>

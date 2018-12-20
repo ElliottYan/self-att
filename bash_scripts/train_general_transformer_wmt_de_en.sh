@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 cd ..
-CUDA_VISIBLE_DEVICES=1,2 python train.py data-bin/wmt14_en_de \
-  -a general_transformer_multidim_wmt_en_de --optimizer adam --lr 0.0005 -s de -t en \
+CUDA_VISIBLE_DEVICES=1 python train.py data-bin/wmt14_en_de \
+  -a general_transformer_wmt_en_de --optimizer adam --lr 0.0005 -s en -t de \
   --label-smoothing 0.1 --dropout 0.3 --max-tokens 1000 \
   --min-lr '1e-09' --lr-scheduler inverse_sqrt --weight-decay 0.0001 \
   --criterion label_smoothed_cross_entropy --max-update 50000 \
